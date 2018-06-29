@@ -5,9 +5,9 @@ import (
 	"context"
 	"os"
 	"bufio"
-	"fmt"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"deploy/logstash/gopath/src/ilog"
 )
 
 func main() {
@@ -45,7 +45,7 @@ func main() {
 func pauseForCheck(step int) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Printf("Finished phase %d, type yes if you want to continue", step)
+		log.Infof("Finished phase %d, type yes if you want to continue", step)
 		scanner.Scan()
 		text := scanner.Text()
 		if text == "yes" {

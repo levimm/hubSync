@@ -13,6 +13,8 @@ import (
 	"docker.io/go-docker/api/types"
 	"os"
 	"bytes"
+	log "github.com/sirupsen/logrus"
+	"time"
 )
 
 const (
@@ -45,7 +47,7 @@ func getAllRepos(namespace string) (repos []Repo) {
 	pageIndex := 1
 	repoQueue := make(chan Repo, pageSize)
 	totalPages := getPagedRepos(namespace, pageSize, pageIndex, repoQueue)
-	fmt.Printf("Total candidate pages: %d\n", totalPages)
+	log.Infof("Total candidate pages: %d\n", totalPages)
 	pageIndex++
 
 	var wg sync.WaitGroup
@@ -70,7 +72,7 @@ func getAllRepos(namespace string) (repos []Repo) {
 }
 
 func getPagedRepos(namespace string, pageSize, pageIndex int, repoChan chan<- Repo) (pages int){
-	fmt.Printf("Getting page %d with %d records per page\n", pageIndex, pageSize)
+	log.Infof("Getting page %d with %d records per page\n", pageIndex, pageSize)
 	url := fmt.Sprintf(DOCKER_HUB_REPO_LIST, namespace, pageSize, pageIndex)
 	client := &http.Client{}
 	resp, err := client.Get(url)
@@ -101,7 +103,7 @@ func getPagedRepos(namespace string, pageSize, pageIndex int, repoChan chan<- Re
 }
 
 func getAllTags(repoName string) (tags []string) {
-	fmt.Printf("Getting tag list for %s\n", repoName)
+	log.Infof("Getting tag list for %s\n", repoName)
 	url := fmt.Sprintf(DOCKER_HUB_TAG_LIST, repoName)
 	client := &http.Client{}
 	resp, err := client.Get(url)
@@ -127,7 +129,7 @@ func getAllTags(repoName string) (tags []string) {
 
 func pullAndRetag(cli *docker.Client, ctx context.Context) (repoNames []string, imageNames []string) {
 	repos := getAllRepos("library")
-	fmt.Printf("Total number of repos to sync: %d\n", len(repos))
+	log.Infof("Total number of repos to sync: %d\n", len(repos))
 
 	var wg sync.WaitGroup
 	wg.Add(len(repos))
@@ -137,19 +139,50 @@ func pullAndRetag(cli *docker.Client, ctx context.Context) (repoNames []string, 
 		go func(repoName string) {
 			defer wg.Done()
 			tags := getAllTags(repoName)
-			fmt.Printf("Repo %s has %d tags.\n", repoName, len(tags))
+			log.Infof("Repo %s has %d tags.\n", repoName, len(tags))
 
 			for _, tag := range tags {
 				imageName := repoName + ":" + tag
-				fmt.Printf("Pulling %s\n", imageName)
-				out, err := cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
-				if err != nil {
-					panic(err)
+				retryCount := 0
+				log.Infof("Pulling %s\n", imageName)
+
+				var out io.ReadCloser
+				var err error
+				for {
+					out, err = cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
+					if err != nil {
+						// retry if timeout happens
+						if retryCount > 3 {
+							log.WithFields(log.Fields{
+								"image": imageName,
+								"retry": retryCount,
+							}).Fatal("Timeout more than 3 times. Panic.")
+							panic(err)
+						}
+						if strings.Contains(err.Error(), "TLS handshake timeout") {
+							log.WithFields(log.Fields{
+								"image": imageName,
+								"retry": retryCount,
+							}).Error("Timeout to pull image")
+							time.Sleep(5 * time.Second)
+							retryCount++
+						} else {
+							log.WithFields(log.Fields{
+								"image": imageName,
+							}).Fatal("unknown err when pulling image")
+							panic(err)
+						}
+					} else {
+						break
+					}
 				}
 				buf := new(bytes.Buffer)
 				buf.ReadFrom(out)
 				out.Close()
 				if bytes.Contains(buf.Bytes(), []byte("no matching manifest for linux/amd64 in the manifest list entries")) {
+					log.WithFields(log.Fields{
+						"image": imageName,
+					}).Info("no matching manifest for linux/amd64, skip pulling")
 					continue
 				}
 
@@ -171,7 +204,7 @@ func pullAndRetag(cli *docker.Client, ctx context.Context) (repoNames []string, 
 }
 
 func getDescription(repoName string) (short, full string) {
-	fmt.Printf("Getting detail info for %s\n", repoName)
+	log.Infof("Getting detail info for %s\n", repoName)
 	url := fmt.Sprintf(DOCKER_STORE_DETAILS, repoName)
 	client := &http.Client{}
 	resp, err := client.Get(url)
@@ -193,3 +226,5 @@ func getDescription(repoName string) (short, full string) {
 
 	return
 }
+
+type imagePullFunc func(ctx context.Context, refStr string, options types.ImagePullOptions) (io.ReadCloser, error)

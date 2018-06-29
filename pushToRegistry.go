@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"encoding/base64"
 	"io"
 	"docker.io/go-docker/api/types"
@@ -10,10 +9,11 @@ import (
 	"docker.io/go-docker"
 	"context"
 	"sync"
+	log "github.com/sirupsen/logrus"
 )
 
 func pushToRegistry(cli *docker.Client, ctx context.Context, images []string) {
-	fmt.Println("Continuing on next phase: push to reg.qiniu.com")
+	log.Infof("Continuing on next phase: push to reg.qiniu.com")
 	authConfig := types.AuthConfig{
 		Username: "",
 		Password: "",
