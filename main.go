@@ -17,6 +17,7 @@ import (
 	"docker.io/go-docker/api/types/mount"
 	"sync"
 	"strings"
+	"flag"
 )
 
 func main() {
@@ -28,27 +29,19 @@ func main() {
 	}
 
 	// this is the docker image hub-sync-pull-push code
-	//pullSync(cli, ctx)
-	//pushSyncMy(cli, ctx)
+	//pullSync(cli, ctx, true)
+	//pushSync(cli, ctx, true, false)
 
 	// this is the golang executable ./runsync code
-	//runSync(cli, ctx)
+	imagePtr := flag.String("image", "reg.qiniu.com/mali/hub-sync-pull-push:always-false", "specify the image to be managed by this app")
+	concurrentNumPtr := flag.Int("concurrent", 5, "the most concurrent dind container number")
+	flag.Parse()
+	reposToUpdate := flag.Args()
+
+	runSync(cli, ctx, *imagePtr, *concurrentNumPtr, reposToUpdate)
 
 	// this is the golang executable that checks status
-	checkSync()
-
-
-
-
-	//images := listImages(cli, ctx)
-	//pushToRegistry(cli, ctx, images)
-
-
-	//pauseForCheck(1)
-
-	// Step2: push to qiniu registry
-	//pushToRegistry(cli, ctx, images)
-	//pauseForCheck(2)
+	//checkSync()
 
 
 	// Step3: modify stark db.repos.summary, db.repos.description
@@ -121,24 +114,25 @@ func initSync() {
 		} else {
 			log.Printf("%s's tag list is already latest, no need to update.", repo)
 		}
-
-
 	}
 }
 
 // pullSync is the pull part for dind image
-func pullSync(cli *docker.Client, ctx context.Context) {
+func pullSync(cli *docker.Client, ctx context.Context, always bool) {
 	tags := getFromFile("/dat/tags.txt")
 	pullNeeded := true
 	repoName := strings.Split(tags[0], ":")[0]
-	_, err := os.Stat("/dat/downloads.txt")
-	if err == nil {
-		downloads := getFromFile("/dat/downloads.txt")
-		skips := getFromFile("/dat/skips.txt")
-		if len(downloads) + len(skips) == len(tags) {
-			pullNeeded = false
-		} else {
-			log.Printf("Num is not correct when pulling, please check repo %s", repoName)
+
+	if always == false {
+		_, err := os.Stat("/dat/downloads.txt")
+		if err == nil {
+			downloads := getFromFile("/dat/downloads.txt")
+			skips := getFromFile("/dat/skips.txt")
+			if len(downloads)+len(skips) == len(tags) {
+				pullNeeded = false
+			} else {
+				log.Printf("Num is not correct when pulling, please check repo %s", repoName)
+			}
 		}
 	}
 
@@ -153,25 +147,34 @@ func pullSync(cli *docker.Client, ctx context.Context) {
 }
 
 // runSync is the executable that manages all running containers
-func runSync(cli *docker.Client, ctx context.Context) {
+func runSync(cli *docker.Client, ctx context.Context, imageParam string, concurrentParam int, reposParam []string) {
 	repos, err := ioutil.ReadDir("./repos")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// concurrent control
-	ch := make(chan struct{}, 5)
-	var wg sync.WaitGroup
-	wg.Add(len(repos))
+	var reposToUpdate []string
+	if len(reposParam) > 0 {
+		reposToUpdate = reposParam
+	} else {
+		for _, repo := range repos {
+			reposToUpdate = append(reposToUpdate, repo.Name())
+		}
+	}
 
-	for _, repoDir := range repos {
+	// concurrent control
+	ch := make(chan struct{}, concurrentParam)
+	var wg sync.WaitGroup
+	wg.Add(len(reposToUpdate))
+
+	for _, repo := range reposToUpdate {
 		go func(repoName string) {
 			defer wg.Done()
 			ch <- struct{}{}
 			log.Printf("Creating dind container to sync repo %s", repoName)
 
 			resp, err := cli.ContainerCreate(ctx, &container.Config{
-				Image: "reg.qiniu.com/mali/hub-sync-pull-push:latest",
+				Image: imageParam,
 			}, &container.HostConfig{
 				AutoRemove: false,
 				Privileged: true,
@@ -214,7 +217,7 @@ func runSync(cli *docker.Client, ctx context.Context) {
 			cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
 
 			<- ch
-		}(repoDir.Name())
+		}(repo)
 	}
 
 	wg.Wait()
@@ -222,24 +225,33 @@ func runSync(cli *docker.Client, ctx context.Context) {
 }
 
 // pushSyncMy is the push part for dind image that pushes to my registry namespace
-func pushSyncMy(cli *docker.Client, ctx context.Context) {
+func pushSync(cli *docker.Client, ctx context.Context, always bool, self bool) {
 	tags := getFromFile("/dat/tags.txt")
 	pushNeeded := true
 	repoName := strings.Split(tags[0], ":")[0]
 	downloads := getFromFile("/dat/downloads.txt")
-	_, err := os.Stat("/dat/push_success.txt")
-	if err == nil {
-		pushes := getFromFile("/dat/push_success.txt")
-		skips := getFromFile("/dat/push_skips.txt")
-		if len(pushes) + len(skips) == len(downloads) {
-			pushNeeded = false
-		} else {
-			log.Printf("Num is not correct when pushing, please check repo %s", repoName)
+
+	// check if no need to push
+	if always == false {
+		_, err := os.Stat("/dat/push_success.txt")
+		if err == nil {
+			pushes := getFromFile("/dat/push_success.txt")
+			skips := getFromFile("/dat/push_skips.txt")
+			if len(pushes)+len(skips) == len(downloads) {
+				pushNeeded = false
+			} else {
+				log.Printf("Num is not correct when pushing, please check repo %s", repoName)
+			}
 		}
 	}
 
 	if pushNeeded {
-		pushes, skips := pushToMyRegistry(cli, ctx, downloads)
+		var pushes, skips []string
+		if self {
+			pushes, skips = pushToMyRegistry(cli, ctx, downloads)
+		} else {
+			pushes, skips = pushToOfficialRegistry(cli, ctx, downloads)
+		}
 		writeToFile("/dat/push_skips.txt", skips)
 		writeToFile("/dat/push_success.txt", pushes)
 		log.Printf("Finish pushing repo %s", repoName)

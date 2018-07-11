@@ -127,79 +127,114 @@ func getAllTags(repoName string) (tags []string) {
 	return
 }
 
-func pullAndRetag(cli *docker.Client, ctx context.Context) (repoNames []string, imageNames []string) {
+func listAllTags(cli *docker.Client, ctx context.Context) (result []string) {
 	repos := getAllRepos("library")
-	log.Infof("Total number of repos to sync: %d\n", len(repos))
+	for _, repo := range repos {
+		tags := getAllTags(repo.Name)
+		for _, tag := range tags {
+			result = append(result, repo.Name+":"+tag)
+		}
+	}
+	return
+}
 
-	var wg sync.WaitGroup
-	wg.Add(len(repos))
-	for _, repo := range repos{
-		repoNames = append(repoNames, repo.Name)
+func listAllRepos() (result []string) {
+	repos := getAllRepos("library")
+	for _, repo := range repos {
+		result = append(result, repo.Name)
+	}
+	return
+}
 
-		go func(repoName string) {
-			defer wg.Done()
-			tags := getAllTags(repoName)
-			log.Infof("Repo %s has %d tags.\n", repoName, len(tags))
-
-			for _, tag := range tags {
-				imageName := repoName + ":" + tag
-				retryCount := 0
-				log.Infof("Pulling %s\n", imageName)
-
-				var out io.ReadCloser
-				var err error
-				for {
-					out, err = cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
-					if err != nil {
-						// retry if timeout happens
-						if retryCount > 3 {
-							log.WithFields(log.Fields{
-								"image": imageName,
-								"retry": retryCount,
-							}).Fatal("Timeout more than 3 times. Panic.")
-							panic(err)
-						}
-						if strings.Contains(err.Error(), "TLS handshake timeout") {
-							log.WithFields(log.Fields{
-								"image": imageName,
-								"retry": retryCount,
-							}).Error("Timeout to pull image")
-							time.Sleep(5 * time.Second)
-							retryCount++
-						} else {
-							log.WithFields(log.Fields{
-								"image": imageName,
-							}).Fatal("unknown err when pulling image")
-							panic(err)
-						}
-					} else {
-						break
-					}
-				}
-				buf := new(bytes.Buffer)
-				buf.ReadFrom(out)
-				out.Close()
-				if bytes.Contains(buf.Bytes(), []byte("no matching manifest for linux/amd64 in the manifest list entries")) {
-					log.WithFields(log.Fields{
-						"image": imageName,
-					}).Info("no matching manifest for linux/amd64, skip pulling")
-					continue
-				}
-
-				io.Copy(os.Stdout, buf)
-
-				// retag the image
-				newTag := "reg.qiniu.com/mali/" + imageName
-				imageNames = append(imageNames, newTag)
-				err = cli.ImageTag(ctx, imageName, newTag)
-				if err != nil {
-					panic(err)
-				}
-			}
-		}(repo.Name)
+func check(all, images, skips []string) (remain []string, extra []string) {
+	for _, item := range all {
+		if contains(images, item) {
+			continue
+		}
+		if contains(skips, item) {
+			continue
+		}
+		remain = append(remain, item)
 	}
 
-	wg.Wait()
+	return
+}
+
+func contains(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+func pullOfficialImages(cli *docker.Client, ctx context.Context, tags []string) (imageNames []string, skipNames []string) {
+	for _, tag := range tags {
+		retryCount := 0
+		log.Infof("Pulling %s\n", tag)
+
+		var out io.ReadCloser
+		var err error
+		for {
+			out, err = cli.ImagePull(ctx, tag, types.ImagePullOptions{})
+			if err != nil {
+				// retry if timeout happens
+				if retryCount > 5 {
+					log.WithFields(log.Fields{
+						"image": tag,
+						"retry": retryCount,
+					}).Error(err)
+					break
+				}
+				if strings.Contains(err.Error(), "TLS handshake timeout") {
+					log.WithFields(log.Fields{
+						"image": tag,
+						"retry": retryCount,
+					}).Error("Timeout to pull image, wait for 5 seconds and retry")
+					time.Sleep(5 * time.Second)
+					retryCount++
+				} else {
+					log.WithFields(log.Fields{
+						"image": tag,
+						"retry": retryCount,
+					}).Error(err)
+					time.Sleep(5 * time.Second)
+					retryCount++
+				}
+			} else {
+				break
+			}
+		}
+
+		if retryCount > 5 {
+			log.WithFields(log.Fields{
+				"image": tag,
+			}).Error("exceed retry count, skip this one")
+			skipNames = append(skipNames, tag)
+			continue
+		}
+
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(out)
+		out.Close()
+		if bytes.Contains(buf.Bytes(), []byte("no matching manifest for linux/amd64 in the manifest list entries")) {
+			log.WithFields(log.Fields{
+				"image": tag,
+			}).Info("no matching manifest for linux/amd64, skip pulling")
+			skipNames = append(skipNames, tag)
+			continue
+		}
+		if bytes.Contains(buf.Bytes(), []byte("Image is up to date for")) ||
+			bytes.Contains(buf.Bytes(), []byte("Downloaded newer image for")) {
+			imageNames = append(imageNames, tag)
+		} else {
+			skipNames = append(skipNames, tag)
+		}
+
+		io.Copy(os.Stdout, buf)
+	}
+
 	return
 }
 
@@ -226,5 +261,3 @@ func getDescription(repoName string) (short, full string) {
 
 	return
 }
-
-type imagePullFunc func(ctx context.Context, refStr string, options types.ImagePullOptions) (io.ReadCloser, error)
