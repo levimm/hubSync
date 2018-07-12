@@ -15,11 +15,13 @@ import (
 	"bytes"
 	log "github.com/sirupsen/logrus"
 	"time"
+	"math"
 )
 
 const (
 	DOCKER_HUB_REPO_LIST string = "https://index.docker.io/v1/search?q=%s&n=%d&page=%d"
 	DOCKER_HUB_TAG_LIST string = "https://registry.hub.docker.com/v1/repositories/%s/tags"
+	DOCKER_HUB_TAG_PAGE string = "https://store.docker.com/api/content/v1/repositories/public/library/%s/tags?page_size=%d&page=%d"
 	DOCKER_STORE_DETAILS string = "https://store.docker.com/api/content/v1/products/images/%s"
 )
 
@@ -102,6 +104,42 @@ func getPagedRepos(namespace string, pageSize, pageIndex int, repoChan chan<- Re
 	return
 }
 
+func getPagedTags(repoName string, pageSize, pageIndex int, tags *[]string) (pages int){
+	log.Infof("Getting page %d with %d records per page\n", pageIndex, pageSize)
+	url := fmt.Sprintf(DOCKER_HUB_TAG_PAGE, repoName, pageSize, pageIndex)
+	client := &http.Client{}
+	resp, err := client.Get(url)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	var data map[string]interface{}
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		panic(err)
+	}
+
+	pages = int(math.Ceil(data["count"].(float64) / float64(pageSize)))
+
+	results := data["results"].([]interface{})
+
+	for _, result := range results {
+		re := result.(map[string]interface{})
+		name := re["name"].(string)
+		if strings.Contains(name, "windowsserver") || strings.Contains(name, "nanoserver") {
+			continue
+		}
+		*tags = append(*tags, name)
+	}
+
+	return
+}
+
 func getAllTags(repoName string) (tags []string) {
 	log.Infof("Getting tag list for %s\n", repoName)
 	url := fmt.Sprintf(DOCKER_HUB_TAG_LIST, repoName)
@@ -122,6 +160,23 @@ func getAllTags(repoName string) (tags []string) {
 	}
 	for _, d := range data {
 		tags = append(tags, d["name"])
+	}
+
+	return
+}
+
+func getFirst100Tags(repoName string) (tags []string) {
+	log.Infof("Getting tag list for %s\n", repoName)
+	pageSize := 100
+	pageIndex := 1
+
+	pageNum := getPagedTags(repoName, pageSize, pageIndex, &tags)
+
+	for pageIndex := 2; pageIndex <= pageNum; pageIndex++ {
+		getPagedTags(repoName, pageSize, pageIndex, &tags)
+	}
+	if len(tags) > 100 {
+		tags = tags[:100]
 	}
 
 	return

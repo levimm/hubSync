@@ -17,7 +17,6 @@ import (
 	"docker.io/go-docker/api/types/mount"
 	"sync"
 	"strings"
-	"flag"
 )
 
 func main() {
@@ -28,26 +27,33 @@ func main() {
 		panic(err)
 	}
 
+	//
+	//initSync()
+
 	// this is the docker image hub-sync-pull-push code
-	//pullSync(cli, ctx, true)
+	pullSync(cli, ctx, true)
 	//pushSync(cli, ctx, true, false)
 
 	// this is the golang executable ./runsync code
-	imagePtr := flag.String("image", "reg.qiniu.com/mali/hub-sync-pull-push:always-false", "specify the image to be managed by this app")
-	concurrentNumPtr := flag.Int("concurrent", 5, "the most concurrent dind container number")
-	flag.Parse()
-	reposToUpdate := flag.Args()
-
-	runSync(cli, ctx, *imagePtr, *concurrentNumPtr, reposToUpdate)
+	//imagePtr := flag.String("image", "reg.qiniu.com/mali/hub-sync-pull-push:always-false", "specify the image to be managed by this app")
+	//concurrentNumPtr := flag.Int("concurrent", 5, "the most concurrent dind container number")
+	//flag.Parse()
+	//reposToUpdate := flag.Args()
+	//
+	//runSync(cli, ctx, *imagePtr, *concurrentNumPtr, reposToUpdate)
 
 	// this is the golang executable that checks status
 	//checkSync()
 
 
+	// some test
+
+
 	// Step3: modify stark db.repos.summary, db.repos.description
+	//repos := []string{"alpine"}
 	//for _, repo := range repos {
 	//	short, full := getDescription(repo)
-	//	session, err := mgo.Dial("mongodb://127.0.0.1:27017/hms")
+	//	session, err := mgo.Dial("mongodb://10.34.42.52:7088/hms")
 	//	if err != nil {
 	//		panic(err)
 	//	}
@@ -105,8 +111,8 @@ func initSync() {
 			}
 		}
 		if tagNeedUpdate {
-			log.Printf("Fetching latest tag list for repo %s", repo)
-			tagList := getAllTags(repo)
+			log.Printf("Fetching latest 100 tags for repo %s", repo)
+			tagList := getFirst100Tags(repo)
 			for i := range tagList {
 				tagList[i] = repo + ":" + tagList[i]
 			}
@@ -303,6 +309,7 @@ func checkSync() {
 					if contains(skips, tag) {
 						continue
 					}
+
 					left = append(left, tag)
 				}
 				log.Printf("Not all tags is pulled. Left tags %v.\n", left)
