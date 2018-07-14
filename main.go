@@ -29,9 +29,10 @@ func main() {
 
 	//
 	//initSync()
+	pullSync(cli, ctx, false)
 
 	// this is the docker image hub-sync-pull-push code
-	pullSync(cli, ctx, true)
+	//pullSync(cli, ctx, true)
 	//pushSync(cli, ctx, true, false)
 
 	// this is the golang executable ./runsync code
@@ -58,7 +59,7 @@ func main() {
 	//		panic(err)
 	//	}
 	//	c := session.DB("hms").C("repos")
-	//	repoFilter := bson.M{"namespace": "mali", "name": repo}
+	//	repoFilter := bson.M{"namespace": "library", "name": repo}
 	//	err = c.Update(repoFilter, bson.M{"$set": bson.M{"summary": short, "description": full}})
 	//	if err != nil {
 	//		panic(err)
@@ -126,26 +127,50 @@ func initSync() {
 // pullSync is the pull part for dind image
 func pullSync(cli *docker.Client, ctx context.Context, always bool) {
 	tags := getFromFile("/dat/tags.txt")
-	pullNeeded := true
+	var toDownload []string
 	repoName := strings.Split(tags[0], ":")[0]
 
 	if always == false {
-		_, err := os.Stat("/dat/downloads.txt")
-		if err == nil {
-			downloads := getFromFile("/dat/downloads.txt")
-			skips := getFromFile("/dat/skips.txt")
-			if len(downloads)+len(skips) == len(tags) {
-				pullNeeded = false
-			} else {
-				log.Printf("Num is not correct when pulling, please check repo %s", repoName)
+		images, err := cli.ImageList(ctx, types.ImageListOptions{All: true})
+		if err != nil {
+			log.WithFields(log.Fields{
+				"repo": repoName,
+			}).Error("Cannot get image list", err)
+			toDownload = tags
+		}
+
+		for _, image := range images {
+			downloadTags := image.RepoTags
+			for _, tag :=range tags {
+				if contains(downloadTags, tag) == false {
+					toDownload = append(toDownload, tag)
+				}
 			}
 		}
+	} else {
+		toDownload = tags
 	}
 
-	if pullNeeded {
-		downloads, skips := pullOfficialImages(cli, ctx, tags)
-		writeToFile("/dat/skips.txt", skips)
-		writeToFile("/dat/downloads.txt", downloads)
+	if len(toDownload) > 0 {
+		pullOfficialImages(cli, ctx, toDownload)
+
+		images, err := cli.ImageList(ctx, types.ImageListOptions{All: true})
+		if err != nil {
+			log.WithFields(log.Fields{
+				"repo": repoName,
+			}).Error("Cannot get image list", err)
+		}
+		var officialTags []string
+		for _, image := range images {
+			downloadTags := image.RepoTags
+			for _, t := range downloadTags {
+				if strings.Contains(t, "reg.qiniu.com") {
+					continue
+				}
+				officialTags = append(officialTags, t)
+			}
+			writeToFile("/dat/downloads.txt", officialTags)
+		}
 		log.Printf("Finish pulling repo %s", repoName)
 	} else {
 		log.Printf("Already pulled repo %s, jump to next", repoName)
