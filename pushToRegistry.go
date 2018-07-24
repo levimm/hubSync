@@ -38,8 +38,8 @@ func pushToMyRegistry(cli *docker.Client, ctx context.Context, images []string) 
 	log.Infof("Continuing on next phase: push to reg.qiniu.com/mali")
 
 	authConfig := types.AuthConfig{
-		Username: "",
-		Password: "",
+		Username: "mali@qiniu.com",
+		Password: "mali1312",
 	}
 	encodedJSON, err := json.Marshal(authConfig)
 	if err != nil {
@@ -97,8 +97,8 @@ func pushToOfficialRegistry(cli *docker.Client, ctx context.Context, images []st
 	log.Infof("Continuing on next phase: push to reg.qiniu.com/library")
 
 	authConfig := types.AuthConfig{
-		Username: "",
-		Password: "",
+		Username: "kirk-internal@qiniu.com",
+		Password: "00381730-6055-11e7-98a5-e3b030c07506",
 	}
 	encodedJSON, err := json.Marshal(authConfig)
 	if err != nil {

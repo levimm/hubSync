@@ -17,6 +17,7 @@ import (
 	"docker.io/go-docker/api/types/mount"
 	"sync"
 	"strings"
+	"fmt"
 )
 
 func main() {
@@ -30,6 +31,7 @@ func main() {
 	//
 	//initSync()
 	pullSync(cli, ctx, false)
+	//pushSync(cli, ctx, false)
 
 	// this is the docker image hub-sync-pull-push code
 	//pullSync(cli, ctx, true)
@@ -136,15 +138,19 @@ func pullSync(cli *docker.Client, ctx context.Context, always bool) {
 			log.WithFields(log.Fields{
 				"repo": repoName,
 			}).Error("Cannot get image list", err)
-			toDownload = tags
 		}
 
+		var downloadTags []string
 		for _, image := range images {
-			downloadTags := image.RepoTags
-			for _, tag :=range tags {
-				if contains(downloadTags, tag) == false {
-					toDownload = append(toDownload, tag)
+			for _, repoTag := range image.RepoTags {
+				if strings.Contains(repoTag, "reg.qiniu.com") == false {
+					downloadTags = append(downloadTags, repoTag)
 				}
+			}
+		}
+		for _, tag :=range tags {
+			if contains(downloadTags, tag) == false {
+				toDownload = append(toDownload, tag)
 			}
 		}
 	} else {
@@ -152,25 +158,8 @@ func pullSync(cli *docker.Client, ctx context.Context, always bool) {
 	}
 
 	if len(toDownload) > 0 {
+		log.Printf("still need to download tags: %v", toDownload)
 		pullOfficialImages(cli, ctx, toDownload)
-
-		images, err := cli.ImageList(ctx, types.ImageListOptions{All: true})
-		if err != nil {
-			log.WithFields(log.Fields{
-				"repo": repoName,
-			}).Error("Cannot get image list", err)
-		}
-		var officialTags []string
-		for _, image := range images {
-			downloadTags := image.RepoTags
-			for _, t := range downloadTags {
-				if strings.Contains(t, "reg.qiniu.com") {
-					continue
-				}
-				officialTags = append(officialTags, t)
-			}
-			writeToFile("/dat/downloads.txt", officialTags)
-		}
 		log.Printf("Finish pulling repo %s", repoName)
 	} else {
 		log.Printf("Already pulled repo %s, jump to next", repoName)
@@ -256,32 +245,35 @@ func runSync(cli *docker.Client, ctx context.Context, imageParam string, concurr
 }
 
 // pushSyncMy is the push part for dind image that pushes to my registry namespace
-func pushSync(cli *docker.Client, ctx context.Context, always bool, self bool) {
+func pushSync(cli *docker.Client, ctx context.Context, self bool) {
 	tags := getFromFile("/dat/tags.txt")
-	pushNeeded := true
 	repoName := strings.Split(tags[0], ":")[0]
-	downloads := getFromFile("/dat/downloads.txt")
+	var toPush []string
 
-	// check if no need to push
-	if always == false {
-		_, err := os.Stat("/dat/push_success.txt")
-		if err == nil {
-			pushes := getFromFile("/dat/push_success.txt")
-			skips := getFromFile("/dat/push_skips.txt")
-			if len(pushes)+len(skips) == len(downloads) {
-				pushNeeded = false
-			} else {
-				log.Printf("Num is not correct when pushing, please check repo %s", repoName)
-			}
+	images, err := cli.ImageList(ctx, types.ImageListOptions{All: true})
+	if err != nil {
+		log.WithFields(log.Fields{
+			"repo": repoName,
+		}).Error("Cannot get image list", err)
+	}
+	var downloadTags []string
+	for _, image := range images {
+		for _, repoTag := range image.RepoTags {
+			downloadTags = append(downloadTags, repoTag)
+		}
+	}
+	for _, tag :=range tags {
+		if contains(downloadTags, tag) == true {
+			toPush = append(toPush, tag)
 		}
 	}
 
-	if pushNeeded {
+	if len(toPush) > 0 {
 		var pushes, skips []string
 		if self {
-			pushes, skips = pushToMyRegistry(cli, ctx, downloads)
+			pushes, skips = pushToMyRegistry(cli, ctx, toPush)
 		} else {
-			pushes, skips = pushToOfficialRegistry(cli, ctx, downloads)
+			pushes, skips = pushToOfficialRegistry(cli, ctx, toPush)
 		}
 		writeToFile("/dat/push_skips.txt", skips)
 		writeToFile("/dat/push_success.txt", pushes)
@@ -303,68 +295,33 @@ func pauseForCheck(step int) {
 	}
 }
 
-func checkSync() {
-	repos, err := ioutil.ReadDir("./repos")
+func checkSync(cli *docker.Client, ctx context.Context) {
+	tags := getFromFile("/dat/tags.txt")
+	repoName := strings.Split(tags[0], ":")[0]
+	var leftTags []string
+
+	images, err := cli.ImageList(ctx, types.ImageListOptions{All: true})
 	if err != nil {
-		log.Fatal(err)
+		log.WithFields(log.Fields{
+			"repo": repoName,
+		}).Error("Cannot get image list", err)
 	}
-	for _, repoDir := range repos {
-		repoName := repoDir.Name()
-		tagsPath := path.Join("/home/mali/hubSync/repos", repoName, "dat/tags.txt")
-		tags := getFromFile(tagsPath)
-		pullDownloadsPath := path.Join("/home/mali/hubSync/repos", repoName, "dat/downloads.txt")
-		pullSkipsPath := path.Join("/home/mali/hubSync/repos", repoName, "dat/skips.txt")
-		pushSuccessPath := path.Join("/home/mali/hubSync/repos", repoName, "dat/push_success.txt")
-		pushSkipsPath := path.Join("/home/mali/hubSync/repos", repoName, "dat/push_skips.txt")
-
-		_, err1 := os.Stat(pullDownloadsPath)
-		_, err2 := os.Stat(pullSkipsPath)
-		if err1 == nil && err2 == nil {
-			downloads := getFromFile(pullDownloadsPath)
-			skips := getFromFile(pullSkipsPath)
-			log.Printf("Pull complete for repo %s, skipped tags %v", repoName, skips)
-			if len(tags) == len(downloads)+len(skips) {
-				log.Printf("All tags is pulled.\n")
-			} else {
-				var left []string
-				for _, tag := range tags {
-					if contains(downloads, tag) {
-						continue
-					}
-					if contains(skips, tag) {
-						continue
-					}
-
-					left = append(left, tag)
-				}
-				log.Printf("Not all tags is pulled. Left tags %v.\n", left)
-			}
-		}
-
-		_, err1 = os.Stat(pushSuccessPath)
-		_, err2 = os.Stat(pushSkipsPath)
-		if err1 == nil && err2 == nil {
-			downloads := getFromFile(pullDownloadsPath)
-			pushes := getFromFile(pushSuccessPath)
-			skips := getFromFile(pushSkipsPath)
-			log.Printf("Push complete for repo %s, skipped tags %v", repoName, skips)
-			if len(downloads) == len(pushes)+len(skips) {
-				log.Printf("All tags is pushed.\n")
-			} else {
-				var left []string
-				for _, tag := range downloads {
-					if contains(pushes, tag) {
-						continue
-					}
-					if contains(skips, tag) {
-						continue
-					}
-					left = append(left, tag)
-				}
-				log.Printf("Not all tags is pulled. Left tags %v.\n", left)
+	var downloadTags []string
+	for _, image := range images {
+		for _, repoTag := range image.RepoTags {
+			if strings.Contains(repoTag, "reg.qiniu.com") == false {
+				downloadTags = append(downloadTags, repoTag)
 			}
 		}
 	}
+	for _, tag :=range tags {
+		if contains(downloadTags, tag) == false {
+			leftTags = append(leftTags, tag)
+		}
+	}
+	var output string
+	fmt.Sprintf(output, "Repo %s has left tags %v", repoName, leftTags)
+	os.Stdout.WriteString(output)
 }
 
 func writeToFile(path string, strs []string) {
