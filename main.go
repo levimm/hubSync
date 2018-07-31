@@ -1,23 +1,24 @@
 package main
 
 import (
-	"docker.io/go-docker"
-	"context"
-	"os"
 	"bufio"
-	_ "gopkg.in/mgo.v2"
-	_ "gopkg.in/mgo.v2/bson"
-	log "github.com/sirupsen/logrus"
-	"docker.io/go-docker/api/types"
-	"docker.io/go-docker/api/types/container"
-	"time"
-	"path"
+	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
-	"docker.io/go-docker/api/types/mount"
-	"sync"
+	"os"
+	"path"
 	"strings"
-	"fmt"
+	"sync"
+	"time"
+
+	"docker.io/go-docker"
+	"docker.io/go-docker/api/types"
+	"docker.io/go-docker/api/types/container"
+	"docker.io/go-docker/api/types/mount"
+	log "github.com/sirupsen/logrus"
+	_ "gopkg.in/mgo.v2"
+	_ "gopkg.in/mgo.v2/bson"
 )
 
 func main() {
@@ -30,7 +31,7 @@ func main() {
 
 	//
 	//initSync()
-	pullSync(cli, ctx, false)
+	//pullSync(cli, ctx, false)
 	//pushSync(cli, ctx, false)
 
 	// this is the docker image hub-sync-pull-push code
@@ -48,9 +49,7 @@ func main() {
 	// this is the golang executable that checks status
 	//checkSync()
 
-
 	// some test
-
 
 	// Step3: modify stark db.repos.summary, db.repos.description
 	//repos := []string{"alpine"}
@@ -68,7 +67,6 @@ func main() {
 	//	}
 	//}
 }
-
 
 // initSync is the executable that initialize directory struct for dind
 func initSync() {
@@ -148,7 +146,7 @@ func pullSync(cli *docker.Client, ctx context.Context, always bool) {
 				}
 			}
 		}
-		for _, tag :=range tags {
+		for _, tag := range tags {
 			if contains(downloadTags, tag) == false {
 				toDownload = append(toDownload, tag)
 			}
@@ -236,7 +234,7 @@ func runSync(cli *docker.Client, ctx context.Context, imageParam string, concurr
 
 			cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
 
-			<- ch
+			<-ch
 		}(repo)
 	}
 
@@ -262,7 +260,7 @@ func pushSync(cli *docker.Client, ctx context.Context, self bool) {
 			downloadTags = append(downloadTags, repoTag)
 		}
 	}
-	for _, tag :=range tags {
+	for _, tag := range tags {
 		if contains(downloadTags, tag) == true {
 			toPush = append(toPush, tag)
 		}
@@ -314,7 +312,7 @@ func checkSync(cli *docker.Client, ctx context.Context) {
 			}
 		}
 	}
-	for _, tag :=range tags {
+	for _, tag := range tags {
 		if contains(downloadTags, tag) == false {
 			leftTags = append(leftTags, tag)
 		}
