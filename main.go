@@ -30,7 +30,7 @@ func main() {
 	}
 
 	//
-	initSync()
+	//initSync()
 	//pullSync(cli, ctx, false)
 	//pushSync(cli, ctx, false)
 
