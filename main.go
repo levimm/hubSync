@@ -29,7 +29,7 @@ func main() {
 		panic(err)
 	}
 
-	//initSync()
+	initSync()
 	//pullSync(cli, ctx, false)
 	//pushSync(cli, ctx, false)
 
